@@ -1,5 +1,3 @@
-# Training-for-Interns
-This repo is for collecting Data and other things
 
 # E-Commerce Database Files Summary
 
