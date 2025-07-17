@@ -17,6 +17,52 @@ SET xmloption = content;
 SET client_min_messages = warning;
 SET row_security = off;
 
+--
+-- Name: getdailysales(text); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.getdailysales(yymmdd text) RETURNS TABLE(category_name character varying, total_revenue numeric)
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        c.category_name,
+        SUM(oi.unit_price * oi.quantity) AS total_revenue
+    FROM
+        orders o
+    JOIN order_items oi ON o.order_id = oi.order_id
+    JOIN product P ON oi.product_id = P.product_id
+    JOIN categories c ON P.category_id = c.category_id
+    WHERE
+        o.order_date = TO_DATE(yymmdd, 'YYMMDD')
+    GROUP BY
+        c.category_name
+    ORDER BY
+        total_revenue DESC;
+END;
+$$;
+
+
+ALTER FUNCTION public.getdailysales(yymmdd text) OWNER TO postgres;
+
+--
+-- Name: log_inventory(); Type: FUNCTION; Schema: public; Owner: postgres
+--
+
+CREATE FUNCTION public.log_inventory() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+        INSERT INTO inv_log(product_id, quantity_change)
+        VALUES (NEW.product_id, (-1) * NEW.quantity);
+        RETURN NEW;
+    END;
+$$;
+
+
+ALTER FUNCTION public.log_inventory() OWNER TO postgres;
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -181,6 +227,41 @@ ALTER SEQUENCE public.employee_employee_id_seq OWNER TO postgres;
 --
 
 ALTER SEQUENCE public.employee_employee_id_seq OWNED BY public.employee.employee_id;
+
+
+--
+-- Name: inv_log; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.inv_log (
+    log_id bigint NOT NULL,
+    product_id integer NOT NULL,
+    quantity_change integer NOT NULL,
+    change_time timestamp without time zone DEFAULT now()
+);
+
+
+ALTER TABLE public.inv_log OWNER TO postgres;
+
+--
+-- Name: inv_log_log_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.inv_log_log_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.inv_log_log_id_seq OWNER TO postgres;
+
+--
+-- Name: inv_log_log_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.inv_log_log_id_seq OWNED BY public.inv_log.log_id;
 
 
 --
@@ -363,6 +444,41 @@ CREATE TABLE public.product_suppliers (
 ALTER TABLE public.product_suppliers OWNER TO postgres;
 
 --
+-- Name: supplier; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.supplier (
+    supplier_id bigint NOT NULL,
+    supplier_name character varying(50) NOT NULL,
+    contact_person_id integer NOT NULL,
+    rating numeric(2,1),
+    address character varying(50),
+    city character varying(25),
+    CONSTRAINT supplier_rating_check CHECK (((rating >= (1)::numeric) AND (rating <= (5)::numeric)))
+);
+
+
+ALTER TABLE public.supplier OWNER TO postgres;
+
+--
+-- Name: product_supplier_info; Type: VIEW; Schema: public; Owner: postgres
+--
+
+CREATE VIEW public.product_supplier_info AS
+ SELECT ps.product_id,
+    p.product_name,
+    s.supplier_name,
+    ps.supply_price,
+    ps.min_order_quantity,
+    ps.lead_time_days
+   FROM ((public.product_suppliers ps
+     JOIN public.product p ON ((ps.product_id = p.product_id)))
+     JOIN public.supplier s ON ((ps.supplier_id = s.supplier_id)));
+
+
+ALTER VIEW public.product_supplier_info OWNER TO postgres;
+
+--
 -- Name: promotions; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -441,23 +557,6 @@ ALTER SEQUENCE public.review_review_id_seq OWNED BY public.review.review_id;
 
 
 --
--- Name: supplier; Type: TABLE; Schema: public; Owner: postgres
---
-
-CREATE TABLE public.supplier (
-    supplier_id bigint NOT NULL,
-    supplier_name character varying(50) NOT NULL,
-    contact_person_id integer NOT NULL,
-    rating numeric(2,1),
-    address character varying(50),
-    city character varying(25),
-    CONSTRAINT supplier_rating_check CHECK (((rating >= (1)::numeric) AND (rating <= (5)::numeric)))
-);
-
-
-ALTER TABLE public.supplier OWNER TO postgres;
-
---
 -- Name: supplier_supplier_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
 --
 
@@ -504,6 +603,13 @@ ALTER TABLE ONLY public.customer ALTER COLUMN customer_id SET DEFAULT nextval('p
 --
 
 ALTER TABLE ONLY public.employee ALTER COLUMN employee_id SET DEFAULT nextval('public.employee_employee_id_seq'::regclass);
+
+
+--
+-- Name: inv_log log_id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.inv_log ALTER COLUMN log_id SET DEFAULT nextval('public.inv_log_log_id_seq'::regclass);
 
 
 --
@@ -1675,6 +1781,15 @@ COPY public.employee (employee_id, first_name, last_name, email, department, "po
 48	Dan	Evans	dan.evans@company.com	IT	IT Support	2015-12-17	75808.00	9
 49	Carol	Hall	carol.hall@company.com	Customer Service	Customer Service Rep	2022-07-06	83905.00	10
 50	Alice	Irwin	alice.irwin@company.com	Finance	Finance Manager	2016-09-03	88998.00	9
+\.
+
+
+--
+-- Data for Name: inv_log; Type: TABLE DATA; Schema: public; Owner: postgres
+--
+
+COPY public.inv_log (log_id, product_id, quantity_change, change_time) FROM stdin;
+1	5	-20	2025-07-17 11:14:56.170157
 \.
 
 
@@ -7691,6 +7806,7 @@ COPY public.order_items (order_item_id, order_id, product_id, quantity, unit_pri
 4998	83	339	3	187.08	561.24
 4999	1969	57	2	47.99	95.98
 5000	881	147	5	289.77	1448.85
+5003	5	5	20	20.00	400.00
 \.
 
 
@@ -11225,1252 +11341,6 @@ COPY public.promotions (promotion_id, promotion_name, description, discount_perc
 --
 
 COPY public.review (review_id, product_id, order_id, rating, review_text, review_date, helpful_votes) FROM stdin;
-1	212	1999	4	Very good	1970-01-01	39
-2	445	1075	3	Does the job	1970-01-01	11
-4	191	1427	5	Excellent product!	1970-01-01	43
-5	440	1367	5	Excellent product!	1970-01-01	9
-6	1	2201	5	Amazing value	1970-01-01	1
-7	57	291	5	Excellent product!	1970-01-01	35
-8	349	364	1	Waste of money	1970-01-01	0
-9	436	864	4	Good quality	1970-01-01	19
-11	335	2144	4	Nice product	1970-01-01	2
-13	197	606	5	Excellent product!	1970-01-01	5
-15	329	2265	4	Nice product	1970-01-01	21
-18	360	1623	4	Good quality	1970-01-01	2
-19	207	1871	2	Below expectations	1970-01-01	40
-20	488	2074	5	Highly recommend	1970-01-01	8
-21	43	1576	3	Decent product	1970-01-01	33
-22	487	1166	4	Nice product	1970-01-01	46
-23	489	600	5	Perfect quality	1970-01-01	44
-24	440	2300	5	Amazing value	1970-01-01	15
-25	173	1442	2	Below expectations	1970-01-01	3
-27	52	2355	5	Excellent product!	1970-01-01	5
-28	452	975	5	Love it!	1970-01-01	24
-29	414	440	1	Very poor quality	1970-01-01	37
-30	41	404	3	Could be better	1970-01-01	5
-32	350	2119	5	Amazing value	1970-01-01	13
-33	376	395	4	Satisfied with purchase	1970-01-01	7
-35	2	2445	4	Good quality	1970-01-01	15
-36	412	380	4	Nice product	1970-01-01	19
-37	316	2011	2	Not great	1970-01-01	29
-38	447	480	5	Excellent product!	1970-01-01	14
-39	85	1355	3	Average quality	1970-01-01	15
-40	49	2245	4	Very good	1970-01-01	26
-42	296	14	3	Average quality	1970-01-01	42
-44	308	1098	5	Highly recommend	1970-01-01	35
-45	120	1140	3	Decent product	1970-01-01	33
-46	43	537	4	Nice product	1970-01-01	49
-48	238	368	4	Good quality	1970-01-01	44
-49	217	1644	4	Nice product	1970-01-01	10
-54	130	741	2	Poor quality	1970-01-01	15
-55	424	1609	4	Very good	1970-01-01	32
-56	345	2459	4	Would buy again	1970-01-01	46
-57	460	2422	3	Could be better	1970-01-01	26
-58	7	2070	4	Nice product	1970-01-01	39
-62	165	668	3	Does the job	1970-01-01	17
-65	40	1698	2	Poor quality	1970-01-01	40
-67	257	2286	3	Could be better	1970-01-01	22
-68	322	1839	4	Good quality	1970-01-01	40
-69	367	586	3	Decent product	1970-01-01	39
-70	124	1893	4	Nice product	1970-01-01	29
-71	452	302	5	Excellent product!	1970-01-01	4
-72	190	1885	5	Perfect quality	1970-01-01	24
-73	456	1112	4	Satisfied with purchase	1970-01-01	28
-75	65	14	4	Nice product	1970-01-01	31
-77	84	906	4	Good quality	1970-01-01	20
-78	494	2433	2	Disappointing	1970-01-01	41
-79	373	1675	4	Very good	1970-01-01	25
-80	311	595	4	Nice product	1970-01-01	15
-81	319	100	5	Excellent product!	1970-01-01	3
-82	171	2388	4	Satisfied with purchase	1970-01-01	47
-84	122	1749	4	Satisfied with purchase	1970-01-01	2
-86	335	69	4	Satisfied with purchase	1970-01-01	17
-87	485	2195	2	Issues with product	1970-01-01	48
-88	401	1640	4	Satisfied with purchase	1970-01-01	49
-89	287	2452	4	Satisfied with purchase	1970-01-01	24
-90	381	1178	4	Very good	1970-01-01	40
-91	130	1309	4	Good quality	1970-01-01	41
-92	145	1550	4	Very good	1970-01-01	40
-94	359	2006	5	Love it!	1970-01-01	19
-95	184	1647	4	Very good	1970-01-01	21
-96	38	409	5	Highly recommend	1970-01-01	15
-97	355	742	4	Nice product	1970-01-01	25
-98	328	970	5	Highly recommend	1970-01-01	22
-99	387	226	3	Does the job	1970-01-01	1
-100	417	1640	3	Decent product	1970-01-01	25
-103	412	112	2	Poor quality	1970-01-01	40
-104	149	917	3	Average quality	1970-01-01	44
-105	457	44	5	Perfect quality	1970-01-01	36
-110	401	2282	5	Love it!	1970-01-01	32
-112	137	44	5	Perfect quality	1970-01-01	46
-113	207	967	5	Love it!	1970-01-01	15
-115	84	1279	5	Highly recommend	1970-01-01	21
-116	17	636	5	Amazing value	1970-01-01	5
-117	326	2053	5	Highly recommend	1970-01-01	26
-118	54	338	3	Decent product	1970-01-01	25
-119	71	434	4	Nice product	1970-01-01	18
-120	450	924	5	Excellent product!	1970-01-01	35
-121	180	872	4	Very good	1970-01-01	30
-122	395	747	5	Excellent product!	1970-01-01	50
-125	244	1829	4	Would buy again	1970-01-01	23
-127	20	1333	4	Good quality	1970-01-01	50
-128	340	1941	3	Average quality	1970-01-01	13
-129	356	162	4	Would buy again	1970-01-01	17
-130	111	1984	4	Satisfied with purchase	1970-01-01	48
-133	70	420	4	Would buy again	1970-01-01	24
-134	333	1727	5	Amazing value	1970-01-01	2
-135	325	1387	4	Good quality	1970-01-01	19
-137	448	80	5	Perfect quality	1970-01-01	49
-138	421	289	4	Would buy again	1970-01-01	31
-139	43	1461	2	Below expectations	1970-01-01	36
-140	490	1761	3	Average quality	1970-01-01	0
-141	308	1790	5	Perfect quality	1970-01-01	39
-145	120	2017	5	Love it!	1970-01-01	7
-148	128	522	3	Does the job	1970-01-01	29
-149	350	463	4	Very good	1970-01-01	3
-150	34	734	2	Disappointing	1970-01-01	16
-152	276	241	4	Satisfied with purchase	1970-01-01	18
-154	63	2023	4	Good quality	1970-01-01	42
-155	85	1355	2	Disappointing	1970-01-01	34
-156	62	1689	4	Satisfied with purchase	1970-01-01	23
-157	211	456	4	Nice product	1970-01-01	25
-159	190	1179	4	Would buy again	1970-01-01	6
-162	46	91	3	Average quality	1970-01-01	9
-163	445	1075	4	Good quality	1970-01-01	35
-164	459	265	1	Completely unsatisfied	1970-01-01	22
-165	222	220	4	Nice product	1970-01-01	31
-166	246	841	4	Nice product	1970-01-01	41
-168	119	1184	4	Very good	1970-01-01	50
-170	76	1479	5	Amazing value	1970-01-01	16
-171	187	1274	4	Very good	1970-01-01	12
-172	387	1032	4	Satisfied with purchase	1970-01-01	47
-173	245	679	5	Perfect quality	1970-01-01	0
-174	299	692	3	Could be better	1970-01-01	16
-175	63	2023	4	Nice product	1970-01-01	40
-178	97	1431	4	Would buy again	1970-01-01	44
-179	273	679	3	Does the job	1970-01-01	35
-180	389	1744	3	Does the job	1970-01-01	21
-181	25	1775	5	Amazing value	1970-01-01	13
-182	456	2022	4	Good quality	1970-01-01	45
-183	313	401	5	Excellent product!	1970-01-01	29
-185	205	694	1	Completely unsatisfied	1970-01-01	24
-187	394	2432	4	Very good	1970-01-01	2
-188	101	2027	5	Highly recommend	1970-01-01	2
-190	235	1186	5	Highly recommend	1970-01-01	50
-191	145	1550	4	Nice product	1970-01-01	31
-193	382	1737	3	It's okay	1970-01-01	45
-196	300	2390	3	Decent product	1970-01-01	50
-197	129	112	5	Highly recommend	1970-01-01	25
-199	5	1278	4	Good quality	1970-01-01	50
-200	419	892	4	Satisfied with purchase	1970-01-01	43
-201	77	1522	5	Amazing value	1970-01-01	26
-202	50	51	1	Terrible	1970-01-01	8
-203	338	1880	2	Issues with product	1970-01-01	17
-204	119	2315	5	Love it!	1970-01-01	22
-205	65	1196	5	Love it!	1970-01-01	0
-206	47	1194	2	Poor quality	1970-01-01	38
-209	479	1306	4	Nice product	1970-01-01	27
-210	152	2029	4	Satisfied with purchase	1970-01-01	30
-211	316	1909	5	Amazing value	1970-01-01	28
-212	404	1686	5	Excellent product!	1970-01-01	17
-213	332	1913	4	Very good	1970-01-01	45
-214	353	2274	5	Excellent product!	1970-01-01	3
-215	142	2406	5	Love it!	1970-01-01	23
-217	40	1851	4	Satisfied with purchase	1970-01-01	1
-218	231	1790	4	Good quality	1970-01-01	42
-219	158	699	4	Would buy again	1970-01-01	37
-220	109	157	5	Excellent product!	1970-01-01	32
-221	101	589	5	Amazing value	1970-01-01	27
-222	342	1277	5	Excellent product!	1970-01-01	8
-223	330	809	4	Satisfied with purchase	1970-01-01	10
-224	201	2048	2	Poor quality	1970-01-01	10
-225	36	1092	5	Excellent product!	1970-01-01	6
-226	180	761	4	Nice product	1970-01-01	9
-228	93	656	4	Good quality	1970-01-01	16
-229	294	1499	4	Good quality	1970-01-01	23
-231	228	1188	5	Love it!	1970-01-01	43
-232	82	1749	5	Perfect quality	1970-01-01	4
-234	319	2268	2	Not great	1970-01-01	49
-235	246	841	4	Good quality	1970-01-01	13
-237	102	336	5	Perfect quality	1970-01-01	3
-238	76	1235	3	Decent product	1970-01-01	44
-239	157	466	4	Would buy again	1970-01-01	46
-240	157	1831	4	Good quality	1970-01-01	6
-241	142	600	4	Good quality	1970-01-01	31
-242	127	1707	5	Perfect quality	1970-01-01	42
-243	342	2320	2	Not great	1970-01-01	16
-244	325	2473	4	Satisfied with purchase	1970-01-01	15
-246	78	1642	3	It's okay	1970-01-01	6
-247	399	1737	2	Below expectations	1970-01-01	34
-249	496	1794	1	Do not buy	1970-01-01	49
-250	445	2302	4	Good quality	1970-01-01	30
-251	138	2125	1	Completely unsatisfied	1970-01-01	26
-252	300	972	4	Would buy again	1970-01-01	6
-254	326	140	5	Love it!	1970-01-01	29
-255	65	1196	4	Nice product	1970-01-01	0
-256	331	507	4	Would buy again	1970-01-01	4
-258	157	1629	4	Satisfied with purchase	1970-01-01	31
-260	273	493	2	Disappointing	1970-01-01	33
-261	457	211	5	Highly recommend	1970-01-01	3
-263	252	2409	5	Love it!	1970-01-01	14
-265	252	2409	4	Would buy again	1970-01-01	39
-266	332	1913	4	Good quality	1970-01-01	37
-267	75	866	4	Would buy again	1970-01-01	20
-268	237	880	5	Love it!	1970-01-01	43
-270	149	304	1	Very poor quality	1970-01-01	36
-271	327	681	1	Completely unsatisfied	1970-01-01	45
-272	380	1479	5	Excellent product!	1970-01-01	19
-273	335	2055	2	Not great	1970-01-01	38
-274	187	1274	4	Very good	1970-01-01	35
-275	48	1600	2	Disappointing	1970-01-01	36
-279	180	761	3	It's okay	1970-01-01	15
-282	43	1576	5	Perfect quality	1970-01-01	25
-283	460	2422	5	Love it!	1970-01-01	7
-284	19	73	4	Very good	1970-01-01	45
-285	407	372	4	Good quality	1970-01-01	17
-286	12	2375	4	Satisfied with purchase	1970-01-01	38
-287	140	2339	3	Does the job	1970-01-01	14
-420	88	465	5	Love it!	1970-01-01	15
-289	157	1831	5	Perfect quality	1970-01-01	43
-290	273	2328	5	Excellent product!	1970-01-01	26
-292	379	9	5	Highly recommend	1970-01-01	21
-293	355	742	5	Highly recommend	1970-01-01	13
-294	381	837	5	Perfect quality	1970-01-01	1
-296	411	1598	5	Excellent product!	1970-01-01	34
-297	380	1564	3	It's okay	1970-01-01	21
-300	69	1866	4	Very good	1970-01-01	14
-301	65	1348	3	Decent product	1970-01-01	6
-302	70	1590	4	Would buy again	1970-01-01	31
-303	140	2449	4	Satisfied with purchase	1970-01-01	22
-305	68	39	5	Perfect quality	1970-01-01	8
-306	178	2434	3	Could be better	1970-01-01	21
-307	325	1387	2	Below expectations	1970-01-01	34
-308	315	676	5	Amazing value	1970-01-01	20
-309	40	946	3	Could be better	1970-01-01	35
-310	361	846	3	Decent product	1970-01-01	48
-311	303	1574	5	Highly recommend	1970-01-01	42
-312	449	953	4	Very good	1970-01-01	24
-313	120	490	3	Does the job	1970-01-01	41
-315	258	144	5	Amazing value	1970-01-01	45
-316	241	1656	4	Satisfied with purchase	1970-01-01	5
-318	309	751	1	Waste of money	1970-01-01	16
-319	49	285	4	Would buy again	1970-01-01	46
-321	441	958	5	Perfect quality	1970-01-01	48
-322	214	1738	5	Perfect quality	1970-01-01	21
-324	407	713	3	Decent product	1970-01-01	2
-325	106	2055	4	Would buy again	1970-01-01	13
-326	168	850	5	Amazing value	1970-01-01	22
-327	427	1687	4	Good quality	1970-01-01	18
-328	353	96	3	It's okay	1970-01-01	38
-329	296	4	5	Amazing value	1970-01-01	23
-331	188	2361	4	Very good	1970-01-01	6
-332	129	1682	2	Issues with product	1970-01-01	25
-333	68	39	3	Could be better	1970-01-01	18
-334	73	1502	4	Good quality	1970-01-01	21
-337	133	598	4	Satisfied with purchase	1970-01-01	43
-338	486	2211	4	Good quality	1970-01-01	21
-340	438	886	4	Nice product	1970-01-01	16
-342	491	1732	5	Excellent product!	1970-01-01	27
-344	288	1971	3	Could be better	1970-01-01	13
-345	314	1407	4	Would buy again	1970-01-01	35
-348	465	655	5	Highly recommend	1970-01-01	38
-349	399	1539	4	Very good	1970-01-01	41
-352	171	120	2	Poor quality	1970-01-01	29
-356	396	1689	5	Excellent product!	1970-01-01	48
-359	243	29	4	Very good	1970-01-01	34
-360	459	617	5	Love it!	1970-01-01	12
-363	441	958	4	Satisfied with purchase	1970-01-01	17
-364	268	219	4	Would buy again	1970-01-01	45
-366	350	2119	5	Highly recommend	1970-01-01	16
-367	417	300	5	Excellent product!	1970-01-01	39
-368	152	612	3	Average quality	1970-01-01	21
-370	281	1354	4	Would buy again	1970-01-01	49
-372	282	1819	4	Satisfied with purchase	1970-01-01	45
-373	10	9	5	Excellent product!	1970-01-01	24
-374	78	1642	5	Perfect quality	1970-01-01	33
-375	163	1119	5	Amazing value	1970-01-01	18
-376	203	1492	4	Good quality	1970-01-01	6
-377	202	1034	2	Issues with product	1970-01-01	48
-381	29	624	5	Amazing value	1970-01-01	0
-382	427	1687	3	Could be better	1970-01-01	48
-383	187	289	5	Love it!	1970-01-01	21
-384	312	108	5	Highly recommend	1970-01-01	27
-385	264	399	4	Would buy again	1970-01-01	25
-386	437	1619	1	Waste of money	1970-01-01	14
-388	336	1718	3	It's okay	1970-01-01	30
-390	20	2284	5	Amazing value	1970-01-01	26
-392	228	1188	5	Amazing value	1970-01-01	36
-393	421	506	4	Nice product	1970-01-01	30
-396	353	346	4	Very good	1970-01-01	10
-398	242	795	5	Amazing value	1970-01-01	26
-400	389	1744	4	Good quality	1970-01-01	7
-401	213	37	4	Satisfied with purchase	1970-01-01	48
-403	69	1866	4	Very good	1970-01-01	5
-404	407	307	5	Love it!	1970-01-01	31
-405	157	1291	3	It's okay	1970-01-01	1
-406	370	1380	2	Poor quality	1970-01-01	45
-407	486	506	4	Very good	1970-01-01	46
-408	320	1496	5	Perfect quality	1970-01-01	23
-410	166	2078	4	Nice product	1970-01-01	42
-411	434	548	5	Excellent product!	1970-01-01	17
-412	484	257	4	Satisfied with purchase	1970-01-01	29
-413	69	521	3	It's okay	1970-01-01	6
-414	474	1504	4	Would buy again	1970-01-01	43
-415	478	994	4	Good quality	1970-01-01	10
-416	174	1945	5	Love it!	1970-01-01	46
-417	147	527	4	Would buy again	1970-01-01	49
-418	226	971	3	Decent product	1970-01-01	12
-419	376	1830	3	Decent product	1970-01-01	32
-421	288	1971	4	Satisfied with purchase	1970-01-01	34
-422	126	2211	5	Excellent product!	1970-01-01	3
-424	345	2459	5	Love it!	1970-01-01	8
-425	365	512	4	Very good	1970-01-01	47
-426	447	490	4	Good quality	1970-01-01	45
-428	60	806	2	Below expectations	1970-01-01	6
-429	406	1258	4	Very good	1970-01-01	27
-430	406	1324	4	Would buy again	1970-01-01	8
-431	70	1924	1	Waste of money	1970-01-01	4
-433	37	390	3	Does the job	1970-01-01	15
-434	406	1815	3	Average quality	1970-01-01	28
-436	91	193	5	Highly recommend	1970-01-01	21
-438	369	1025	4	Nice product	1970-01-01	6
-439	150	2294	3	Does the job	1970-01-01	20
-441	188	673	5	Highly recommend	1970-01-01	18
-442	188	1466	4	Very good	1970-01-01	50
-443	168	923	4	Would buy again	1970-01-01	44
-444	273	679	5	Perfect quality	1970-01-01	11
-445	356	162	3	Could be better	1970-01-01	15
-446	220	478	4	Satisfied with purchase	1970-01-01	8
-448	147	1218	3	It's okay	1970-01-01	34
-451	327	494	3	It's okay	1970-01-01	19
-452	92	2107	4	Would buy again	1970-01-01	28
-453	330	809	3	Could be better	1970-01-01	50
-454	258	1392	4	Satisfied with purchase	1970-01-01	48
-457	350	2119	3	Does the job	1970-01-01	19
-458	449	959	4	Would buy again	1970-01-01	31
-459	243	740	3	Could be better	1970-01-01	30
-464	463	1839	4	Nice product	1970-01-01	48
-465	324	854	5	Perfect quality	1970-01-01	34
-466	171	2388	4	Good quality	1970-01-01	18
-467	311	1444	4	Would buy again	1970-01-01	40
-469	88	465	1	Terrible	1970-01-01	44
-475	12	1180	4	Satisfied with purchase	1970-01-01	23
-477	342	2320	3	Decent product	1970-01-01	3
-478	309	1665	4	Very good	1970-01-01	17
-479	377	819	5	Excellent product!	1970-01-01	6
-480	168	850	4	Satisfied with purchase	1970-01-01	15
-481	78	1642	2	Not great	1970-01-01	29
-482	122	2396	3	Average quality	1970-01-01	19
-483	324	1055	5	Perfect quality	1970-01-01	21
-484	386	2105	4	Very good	1970-01-01	0
-486	462	2	5	Love it!	1970-01-01	21
-487	45	605	4	Good quality	1970-01-01	19
-488	132	23	3	Decent product	1970-01-01	40
-489	225	1102	3	Does the job	1970-01-01	26
-490	187	1274	4	Would buy again	1970-01-01	30
-491	361	927	5	Excellent product!	1970-01-01	15
-492	316	1734	5	Excellent product!	1970-01-01	10
-493	315	1899	3	Average quality	1970-01-01	19
-496	460	2422	4	Nice product	1970-01-01	45
-500	1	701	4	Good quality	1970-01-01	16
-501	130	741	4	Very good	1970-01-01	18
-502	102	1609	3	Average quality	1970-01-01	25
-503	268	2333	4	Nice product	1970-01-01	46
-504	224	1057	5	Excellent product!	1970-01-01	27
-505	71	1558	4	Good quality	1970-01-01	17
-507	397	1116	3	Average quality	1970-01-01	36
-508	161	311	4	Very good	1970-01-01	20
-514	120	1140	3	Average quality	1970-01-01	11
-516	405	1346	5	Highly recommend	1970-01-01	6
-517	478	423	5	Love it!	1970-01-01	48
-518	224	1057	4	Good quality	1970-01-01	40
-519	76	1457	4	Good quality	1970-01-01	45
-520	191	737	5	Love it!	1970-01-01	15
-523	165	538	3	It's okay	1970-01-01	45
-524	274	2198	2	Disappointing	1970-01-01	34
-525	500	947	5	Excellent product!	1970-01-01	37
-526	268	2333	5	Perfect quality	1970-01-01	44
-527	331	2430	2	Poor quality	1970-01-01	41
-529	12	2253	5	Perfect quality	1970-01-01	25
-530	376	1830	3	It's okay	1970-01-01	39
-531	128	1794	3	Does the job	1970-01-01	5
-532	106	1338	2	Poor quality	1970-01-01	2
-533	328	505	5	Amazing value	1970-01-01	37
-534	367	614	2	Poor quality	1970-01-01	46
-535	60	2286	5	Perfect quality	1970-01-01	1
-536	406	1461	3	Average quality	1970-01-01	44
-537	93	2032	3	Does the job	1970-01-01	48
-539	97	1431	2	Below expectations	1970-01-01	48
-540	1	701	3	Could be better	1970-01-01	25
-541	167	945	4	Satisfied with purchase	1970-01-01	32
-544	489	1151	3	Could be better	1970-01-01	47
-545	47	2035	4	Very good	1970-01-01	42
-546	27	1127	5	Perfect quality	1970-01-01	45
-549	189	2399	5	Excellent product!	1970-01-01	27
-550	143	2049	5	Perfect quality	1970-01-01	18
-551	381	2023	3	Does the job	1970-01-01	35
-552	51	184	4	Nice product	1970-01-01	22
-553	102	613	4	Would buy again	1970-01-01	28
-554	27	551	4	Very good	1970-01-01	12
-556	45	475	1	Completely unsatisfied	1970-01-01	6
-557	414	440	1	Very poor quality	1970-01-01	48
-558	60	2286	4	Very good	1970-01-01	3
-559	153	188	5	Amazing value	1970-01-01	31
-562	103	231	3	Could be better	1970-01-01	7
-564	128	1494	2	Issues with product	1970-01-01	45
-565	27	1494	4	Good quality	1970-01-01	33
-566	189	2399	5	Perfect quality	1970-01-01	26
-567	498	710	5	Excellent product!	1970-01-01	40
-568	140	937	1	Completely unsatisfied	1970-01-01	21
-572	133	1044	1	Do not buy	1970-01-01	45
-573	203	561	4	Very good	1970-01-01	40
-574	237	1048	5	Excellent product!	1970-01-01	42
-575	102	336	5	Perfect quality	1970-01-01	9
-576	34	734	4	Would buy again	1970-01-01	22
-577	65	1196	4	Very good	1970-01-01	33
-578	328	290	3	It's okay	1970-01-01	14
-579	376	395	1	Do not buy	1970-01-01	28
-581	82	2363	4	Nice product	1970-01-01	6
-584	158	1324	3	Could be better	1970-01-01	36
-587	204	1668	2	Issues with product	1970-01-01	48
-588	401	892	4	Very good	1970-01-01	27
-589	422	1059	3	Could be better	1970-01-01	22
-590	73	1860	4	Good quality	1970-01-01	25
-591	228	2319	3	Does the job	1970-01-01	48
-592	2	2445	2	Not great	1970-01-01	40
-593	481	1038	4	Satisfied with purchase	1970-01-01	9
-594	269	1638	1	Terrible	1970-01-01	22
-595	15	653	4	Good quality	1970-01-01	21
-597	69	646	4	Would buy again	1970-01-01	50
-598	334	2171	3	Average quality	1970-01-01	24
-599	1	1408	4	Nice product	1970-01-01	6
-601	341	2141	4	Satisfied with purchase	1970-01-01	26
-602	316	2011	2	Disappointing	1970-01-01	30
-604	183	2293	2	Not great	1970-01-01	23
-606	448	1041	5	Perfect quality	1970-01-01	20
-607	290	2262	1	Terrible	1970-01-01	18
-608	392	345	4	Very good	1970-01-01	47
-609	324	854	5	Amazing value	1970-01-01	35
-611	485	1887	4	Would buy again	1970-01-01	33
-614	252	2409	2	Poor quality	1970-01-01	12
-615	387	226	5	Perfect quality	1970-01-01	33
-617	382	1737	3	It's okay	1970-01-01	1
-618	40	1698	4	Good quality	1970-01-01	20
-619	310	599	3	Does the job	1970-01-01	14
-621	18	1659	3	Could be better	1970-01-01	36
-623	204	1668	4	Would buy again	1970-01-01	32
-624	69	646	4	Satisfied with purchase	1970-01-01	6
-625	407	372	4	Would buy again	1970-01-01	9
-626	493	2064	3	Could be better	1970-01-01	20
-627	25	2244	4	Very good	1970-01-01	10
-628	352	2163	2	Not great	1970-01-01	14
-630	237	1048	5	Perfect quality	1970-01-01	23
-631	446	73	4	Would buy again	1970-01-01	6
-632	138	1081	3	It's okay	1970-01-01	23
-633	365	1703	4	Very good	1970-01-01	16
-634	138	2125	2	Issues with product	1970-01-01	40
-636	336	1718	3	Could be better	1970-01-01	27
-637	262	2488	1	Completely unsatisfied	1970-01-01	7
-639	327	681	5	Love it!	1970-01-01	8
-641	149	304	4	Nice product	1970-01-01	49
-642	402	165	3	Decent product	1970-01-01	37
-643	323	31	4	Satisfied with purchase	1970-01-01	5
-647	178	976	3	Could be better	1970-01-01	39
-648	369	237	3	Decent product	1970-01-01	18
-649	19	1882	3	Average quality	1970-01-01	9
-651	179	2389	3	Does the job	1970-01-01	35
-652	257	1526	2	Issues with product	1970-01-01	25
-653	314	1785	3	It's okay	1970-01-01	29
-654	331	732	3	It's okay	1970-01-01	23
-655	417	2469	1	Terrible	1970-01-01	7
-656	366	802	5	Excellent product!	1970-01-01	9
-657	70	281	4	Would buy again	1970-01-01	37
-663	299	1502	5	Amazing value	1970-01-01	46
-664	357	2433	3	Could be better	1970-01-01	43
-665	411	469	4	Good quality	1970-01-01	31
-667	166	576	3	It's okay	1970-01-01	14
-671	324	1055	3	Does the job	1970-01-01	12
-672	342	1277	5	Amazing value	1970-01-01	7
-673	274	564	5	Amazing value	1970-01-01	6
-675	239	842	3	Does the job	1970-01-01	5
-676	102	980	4	Satisfied with purchase	1970-01-01	20
-677	401	892	4	Would buy again	1970-01-01	37
-678	297	2472	4	Good quality	1970-01-01	28
-680	133	1600	4	Good quality	1970-01-01	3
-681	58	423	5	Highly recommend	1970-01-01	6
-686	299	1082	3	Does the job	1970-01-01	24
-687	327	1703	3	Could be better	1970-01-01	48
-691	198	2361	4	Very good	1970-01-01	46
-692	406	1461	3	Average quality	1970-01-01	28
-693	30	777	3	Decent product	1970-01-01	37
-694	66	1133	4	Nice product	1970-01-01	0
-695	254	1925	4	Satisfied with purchase	1970-01-01	38
-698	70	281	3	Could be better	1970-01-01	4
-699	133	2486	1	Do not buy	1970-01-01	14
-700	152	1801	3	Could be better	1970-01-01	14
-703	404	121	5	Amazing value	1970-01-01	22
-706	124	422	4	Very good	1970-01-01	1
-707	392	680	5	Amazing value	1970-01-01	41
-708	25	1103	3	Could be better	1970-01-01	6
-709	223	248	3	Average quality	1970-01-01	2
-710	197	1655	4	Good quality	1970-01-01	3
-711	196	1382	3	Does the job	1970-01-01	25
-712	36	1879	4	Good quality	1970-01-01	35
-713	260	1450	4	Nice product	1970-01-01	33
-714	84	1279	4	Nice product	1970-01-01	33
-717	363	13	3	It's okay	1970-01-01	3
-718	184	1647	5	Highly recommend	1970-01-01	29
-719	250	225	1	Terrible	1970-01-01	31
-720	482	2272	5	Love it!	1970-01-01	30
-721	166	1566	3	Does the job	1970-01-01	12
-722	350	2119	5	Excellent product!	1970-01-01	33
-724	478	1316	2	Not great	1970-01-01	6
-729	75	1565	5	Perfect quality	1970-01-01	1
-730	466	1049	3	It's okay	1970-01-01	18
-731	287	2452	3	Does the job	1970-01-01	37
-733	417	1271	4	Good quality	1970-01-01	14
-734	331	2432	3	Decent product	1970-01-01	42
-737	286	1771	4	Satisfied with purchase	1970-01-01	36
-739	324	664	5	Highly recommend	1970-01-01	43
-740	405	119	1	Waste of money	1970-01-01	14
-741	265	903	4	Very good	1970-01-01	48
-742	145	1550	2	Issues with product	1970-01-01	37
-743	394	1348	4	Would buy again	1970-01-01	25
-744	181	939	5	Love it!	1970-01-01	24
-745	128	1794	5	Amazing value	1970-01-01	41
-748	125	493	5	Love it!	1970-01-01	32
-749	88	1800	4	Satisfied with purchase	1970-01-01	12
-750	331	46	5	Amazing value	1970-01-01	22
-752	470	503	5	Highly recommend	1970-01-01	21
-753	417	1271	5	Love it!	1970-01-01	39
-754	130	637	3	Could be better	1970-01-01	24
-755	133	598	4	Very good	1970-01-01	44
-756	2	374	2	Poor quality	1970-01-01	36
-757	44	2472	3	It's okay	1970-01-01	48
-758	285	712	4	Nice product	1970-01-01	28
-759	488	1975	5	Highly recommend	1970-01-01	23
-760	1	1408	4	Very good	1970-01-01	14
-763	68	1324	2	Not great	1970-01-01	8
-764	452	1483	3	Could be better	1970-01-01	37
-765	430	2435	4	Satisfied with purchase	1970-01-01	23
-766	34	1820	5	Highly recommend	1970-01-01	25
-767	115	334	3	Decent product	1970-01-01	44
-768	349	1464	4	Very good	1970-01-01	18
-772	223	248	3	Average quality	1970-01-01	44
-773	247	880	5	Excellent product!	1970-01-01	34
-776	147	881	4	Very good	1970-01-01	1
-778	375	1282	1	Terrible	1970-01-01	50
-779	362	915	5	Excellent product!	1970-01-01	20
-780	187	2391	4	Would buy again	1970-01-01	37
-781	373	2471	4	Nice product	1970-01-01	50
-782	247	2466	3	Decent product	1970-01-01	32
-783	43	1576	2	Not great	1970-01-01	14
-784	439	1144	1	Completely unsatisfied	1970-01-01	8
-785	3	277	4	Satisfied with purchase	1970-01-01	19
-786	313	401	4	Would buy again	1970-01-01	36
-787	60	429	4	Nice product	1970-01-01	25
-788	247	2466	4	Satisfied with purchase	1970-01-01	13
-789	406	1258	2	Disappointing	1970-01-01	16
-791	367	2210	5	Love it!	1970-01-01	26
-793	195	344	4	Nice product	1970-01-01	8
-794	448	1034	5	Amazing value	1970-01-01	8
-796	352	2015	5	Amazing value	1970-01-01	25
-797	213	37	5	Excellent product!	1970-01-01	24
-799	254	727	3	Could be better	1970-01-01	48
-800	236	876	2	Below expectations	1970-01-01	15
-801	459	617	4	Satisfied with purchase	1970-01-01	40
-802	385	2094	4	Very good	1970-01-01	29
-804	178	225	4	Very good	1970-01-01	15
-805	459	941	2	Issues with product	1970-01-01	4
-808	466	1626	2	Below expectations	1970-01-01	29
-809	227	1203	5	Love it!	1970-01-01	38
-810	291	2400	3	Decent product	1970-01-01	38
-812	268	2333	5	Amazing value	1970-01-01	10
-813	426	2083	5	Perfect quality	1970-01-01	39
-814	47	79	4	Good quality	1970-01-01	19
-815	469	919	4	Good quality	1970-01-01	15
-816	374	1518	5	Highly recommend	1970-01-01	45
-817	91	2281	5	Highly recommend	1970-01-01	7
-820	335	2144	4	Very good	1970-01-01	45
-821	213	511	4	Good quality	1970-01-01	31
-823	240	1611	3	It's okay	1970-01-01	40
-824	334	633	5	Love it!	1970-01-01	30
-825	497	865	4	Nice product	1970-01-01	10
-826	54	338	5	Amazing value	1970-01-01	44
-828	126	1286	3	Does the job	1970-01-01	15
-829	92	2083	4	Very good	1970-01-01	11
-830	331	507	5	Highly recommend	1970-01-01	46
-831	252	1750	1	Waste of money	1970-01-01	20
-832	74	1194	4	Very good	1970-01-01	50
-833	457	2491	1	Completely unsatisfied	1970-01-01	22
-834	460	1693	4	Nice product	1970-01-01	31
-836	457	211	4	Satisfied with purchase	1970-01-01	29
-837	319	1354	5	Amazing value	1970-01-01	38
-838	406	1815	5	Highly recommend	1970-01-01	37
-840	116	351	5	Love it!	1970-01-01	46
-843	205	1870	4	Very good	1970-01-01	4
-844	452	302	4	Satisfied with purchase	1970-01-01	29
-845	252	2409	1	Completely unsatisfied	1970-01-01	9
-847	421	1376	5	Excellent product!	1970-01-01	10
-849	4	2223	5	Love it!	1970-01-01	1
-850	111	1984	5	Amazing value	1970-01-01	23
-851	222	220	4	Satisfied with purchase	1970-01-01	47
-852	339	867	5	Love it!	1970-01-01	10
-853	8	1484	4	Nice product	1970-01-01	32
-854	173	1390	4	Satisfied with purchase	1970-01-01	7
-856	119	976	1	Do not buy	1970-01-01	45
-857	445	2408	4	Satisfied with purchase	1970-01-01	10
-858	286	1296	4	Satisfied with purchase	1970-01-01	27
-859	389	1178	5	Perfect quality	1970-01-01	22
-860	270	1284	2	Not great	1970-01-01	8
-861	352	1967	1	Completely unsatisfied	1970-01-01	1
-862	193	2174	4	Satisfied with purchase	1970-01-01	30
-863	414	183	3	It's okay	1970-01-01	43
-864	273	1332	5	Highly recommend	1970-01-01	44
-865	215	2184	4	Satisfied with purchase	1970-01-01	25
-866	145	1455	3	Average quality	1970-01-01	46
-867	165	2461	5	Perfect quality	1970-01-01	5
-868	94	1905	4	Very good	1970-01-01	23
-871	4	2223	4	Nice product	1970-01-01	16
-872	215	2184	5	Love it!	1970-01-01	11
-874	411	2082	4	Would buy again	1970-01-01	8
-876	369	1598	4	Satisfied with purchase	1970-01-01	45
-880	310	599	5	Perfect quality	1970-01-01	29
-881	427	2063	3	Average quality	1970-01-01	7
-882	480	2253	5	Amazing value	1970-01-01	35
-883	184	1647	1	Completely unsatisfied	1970-01-01	26
-884	17	636	5	Love it!	1970-01-01	27
-885	271	759	5	Highly recommend	1970-01-01	24
-886	40	1851	5	Highly recommend	1970-01-01	43
-887	203	543	3	Average quality	1970-01-01	0
-888	386	1627	3	Does the job	1970-01-01	16
-889	449	1809	2	Not great	1970-01-01	6
-890	246	841	4	Good quality	1970-01-01	29
-891	456	1112	1	Completely unsatisfied	1970-01-01	18
-893	116	351	2	Not great	1970-01-01	26
-894	43	537	3	Decent product	1970-01-01	44
-896	30	777	3	It's okay	1970-01-01	8
-897	34	1122	3	It's okay	1970-01-01	0
-898	287	17	3	It's okay	1970-01-01	39
-900	98	40	5	Highly recommend	1970-01-01	46
-901	145	496	5	Love it!	1970-01-01	21
-903	284	1564	5	Perfect quality	1970-01-01	10
-904	104	501	4	Satisfied with purchase	1970-01-01	42
-906	136	1720	3	Decent product	1970-01-01	29
-907	174	1094	4	Good quality	1970-01-01	22
-908	300	2209	5	Excellent product!	1970-01-01	45
-910	215	1318	5	Love it!	1970-01-01	23
-911	357	1069	1	Terrible	1970-01-01	7
-912	366	824	5	Love it!	1970-01-01	20
-913	194	910	3	Could be better	1970-01-01	11
-914	325	1387	4	Nice product	1970-01-01	34
-915	414	440	3	It's okay	1970-01-01	5
-916	230	1532	5	Perfect quality	1970-01-01	37
-917	64	949	1	Waste of money	1970-01-01	16
-918	193	2174	5	Perfect quality	1970-01-01	34
-919	242	1087	5	Amazing value	1970-01-01	45
-920	299	1082	5	Highly recommend	1970-01-01	34
-921	445	1663	4	Good quality	1970-01-01	8
-923	42	796	3	Average quality	1970-01-01	44
-924	78	1461	3	Does the job	1970-01-01	46
-928	461	1600	4	Would buy again	1970-01-01	38
-929	64	2335	4	Very good	1970-01-01	43
-930	264	1457	3	Could be better	1970-01-01	35
-932	152	1323	3	Does the job	1970-01-01	21
-933	104	1678	4	Satisfied with purchase	1970-01-01	16
-934	225	2117	3	It's okay	1970-01-01	24
-935	491	1981	1	Completely unsatisfied	1970-01-01	22
-937	178	2434	5	Excellent product!	1970-01-01	22
-939	195	1074	5	Love it!	1970-01-01	45
-941	180	761	5	Love it!	1970-01-01	29
-942	47	1822	4	Very good	1970-01-01	42
-943	362	75	4	Nice product	1970-01-01	33
-944	215	778	4	Satisfied with purchase	1970-01-01	43
-946	500	1062	5	Excellent product!	1970-01-01	15
-947	179	2389	5	Amazing value	1970-01-01	48
-948	380	839	4	Nice product	1970-01-01	38
-949	362	915	2	Not great	1970-01-01	21
-951	132	78	5	Love it!	1970-01-01	33
-953	268	1672	4	Nice product	1970-01-01	33
-954	308	209	4	Satisfied with purchase	1970-01-01	23
-955	131	2186	5	Amazing value	1970-01-01	39
-956	454	2101	4	Nice product	1970-01-01	6
-960	363	938	3	Decent product	1970-01-01	41
-961	493	2091	1	Waste of money	1970-01-01	37
-962	258	1392	3	Decent product	1970-01-01	50
-963	477	750	5	Perfect quality	1970-01-01	17
-964	270	1306	3	Does the job	1970-01-01	19
-965	423	690	3	It's okay	1970-01-01	25
-967	228	1188	2	Disappointing	1970-01-01	41
-970	60	322	5	Excellent product!	1970-01-01	25
-971	209	150	1	Very poor quality	1970-01-01	21
-972	60	2286	4	Nice product	1970-01-01	39
-973	219	2028	4	Nice product	1970-01-01	3
-974	276	1014	4	Nice product	1970-01-01	50
-975	250	179	4	Would buy again	1970-01-01	32
-976	336	1718	5	Highly recommend	1970-01-01	48
-978	442	1895	3	Could be better	1970-01-01	26
-980	221	1693	4	Nice product	1970-01-01	24
-981	417	2469	4	Good quality	1970-01-01	13
-982	364	2351	5	Excellent product!	1970-01-01	44
-984	65	1196	2	Below expectations	1970-01-01	24
-985	452	302	2	Poor quality	1970-01-01	42
-989	287	17	4	Good quality	1970-01-01	15
-990	377	1016	5	Highly recommend	1970-01-01	37
-993	310	1091	4	Very good	1970-01-01	11
-994	365	641	3	Average quality	1970-01-01	43
-996	224	592	5	Perfect quality	1970-01-01	10
-999	63	866	4	Good quality	1970-01-01	44
-1001	404	748	3	Could be better	1970-01-01	18
-1002	160	744	4	Nice product	1970-01-01	2
-1003	68	2203	4	Good quality	1970-01-01	23
-1005	224	2424	3	Could be better	1970-01-01	9
-1007	487	949	3	Average quality	1970-01-01	19
-1009	425	359	3	Does the job	1970-01-01	17
-1010	370	2302	5	Highly recommend	1970-01-01	49
-1012	43	537	3	Decent product	1970-01-01	15
-1013	1	2201	5	Amazing value	1970-01-01	40
-1014	383	1615	2	Not great	1970-01-01	26
-1015	149	2049	3	Could be better	1970-01-01	25
-1017	473	1286	5	Amazing value	1970-01-01	15
-1018	252	2342	4	Very good	1970-01-01	24
-1019	268	1215	3	Could be better	1970-01-01	44
-1021	190	1885	4	Good quality	1970-01-01	21
-1022	212	1063	4	Very good	1970-01-01	26
-1023	91	193	3	Does the job	1970-01-01	0
-1024	421	1376	4	Would buy again	1970-01-01	34
-1025	409	1203	4	Good quality	1970-01-01	50
-1027	95	766	3	Average quality	1970-01-01	26
-1029	252	2342	4	Good quality	1970-01-01	26
-1031	293	1720	1	Completely unsatisfied	1970-01-01	44
-1033	299	1605	5	Love it!	1970-01-01	36
-1035	436	1022	4	Satisfied with purchase	1970-01-01	36
-1036	313	401	1	Waste of money	1970-01-01	3
-1037	252	889	4	Good quality	1970-01-01	43
-1038	91	1234	1	Terrible	1970-01-01	49
-1039	240	889	4	Would buy again	1970-01-01	29
-1044	324	1055	1	Terrible	1970-01-01	43
-1046	476	737	4	Satisfied with purchase	1970-01-01	19
-1047	335	656	4	Would buy again	1970-01-01	38
-1048	50	51	4	Satisfied with purchase	1970-01-01	7
-1049	2	374	4	Very good	1970-01-01	41
-1050	398	648	3	Average quality	1970-01-01	43
-1051	357	1118	5	Amazing value	1970-01-01	40
-1053	97	1431	5	Excellent product!	1970-01-01	38
-1054	381	2023	3	Could be better	1970-01-01	41
-1056	171	1188	3	Could be better	1970-01-01	10
-1057	437	1261	3	Could be better	1970-01-01	3
-1058	127	1044	5	Love it!	1970-01-01	9
-1059	404	1686	4	Would buy again	1970-01-01	47
-1061	58	1984	3	Decent product	1970-01-01	20
-1062	49	285	4	Nice product	1970-01-01	28
-1063	470	132	5	Amazing value	1970-01-01	9
-1065	99	1104	2	Poor quality	1970-01-01	10
-1066	210	1063	4	Nice product	1970-01-01	44
-1067	487	330	5	Excellent product!	1970-01-01	10
-1068	458	1656	4	Nice product	1970-01-01	3
-1070	33	265	5	Perfect quality	1970-01-01	45
-1071	85	1775	4	Nice product	1970-01-01	20
-1072	187	1274	2	Disappointing	1970-01-01	26
-1073	261	1161	1	Completely unsatisfied	1970-01-01	44
-1074	352	950	5	Highly recommend	1970-01-01	16
-1075	43	537	4	Good quality	1970-01-01	21
-1076	336	1718	3	Could be better	1970-01-01	28
-1078	38	409	4	Good quality	1970-01-01	31
-1082	35	1988	4	Nice product	1970-01-01	26
-1084	128	759	5	Highly recommend	1970-01-01	9
-1085	254	1925	5	Amazing value	1970-01-01	38
-1086	181	1016	4	Satisfied with purchase	1970-01-01	19
-1087	90	62	3	Decent product	1970-01-01	50
-1088	414	1390	4	Nice product	1970-01-01	9
-1089	202	1121	5	Excellent product!	1970-01-01	41
-1090	470	132	5	Perfect quality	1970-01-01	28
-1091	415	1615	1	Very poor quality	1970-01-01	31
-1092	387	860	2	Issues with product	1970-01-01	2
-1093	168	826	3	Could be better	1970-01-01	32
-1095	422	420	1	Waste of money	1970-01-01	44
-1096	133	2486	5	Highly recommend	1970-01-01	19
-1097	360	665	5	Amazing value	1970-01-01	23
-1098	214	1526	4	Satisfied with purchase	1970-01-01	37
-1099	73	1571	4	Very good	1970-01-01	11
-1101	105	1126	5	Perfect quality	1970-01-01	35
-1103	399	1737	4	Satisfied with purchase	1970-01-01	43
-1105	286	330	5	Excellent product!	1970-01-01	38
-1106	88	1800	2	Issues with product	1970-01-01	43
-1107	158	426	3	It's okay	1970-01-01	28
-1108	406	1258	1	Terrible	1970-01-01	0
-1109	350	463	4	Would buy again	1970-01-01	6
-1111	248	499	4	Very good	1970-01-01	18
-1114	175	899	5	Amazing value	1970-01-01	46
-1115	369	1025	4	Would buy again	1970-01-01	44
-1116	65	657	3	Does the job	1970-01-01	5
-1117	294	280	4	Good quality	1970-01-01	5
-1118	178	225	1	Completely unsatisfied	1970-01-01	0
-1119	323	86	2	Below expectations	1970-01-01	6
-1120	228	1998	4	Good quality	1970-01-01	46
-1123	224	592	3	Does the job	1970-01-01	30
-1124	230	570	3	Average quality	1970-01-01	43
-1125	100	930	4	Very good	1970-01-01	0
-1126	328	1220	5	Love it!	1970-01-01	30
-1128	365	1109	4	Nice product	1970-01-01	38
-1130	467	852	4	Would buy again	1970-01-01	44
-1131	70	2322	4	Good quality	1970-01-01	14
-1133	453	1180	5	Highly recommend	1970-01-01	38
-1136	184	1647	4	Nice product	1970-01-01	47
-1137	146	1492	3	Average quality	1970-01-01	18
-1138	395	799	2	Disappointing	1970-01-01	22
-1140	364	2351	5	Love it!	1970-01-01	18
-1143	269	1569	3	Decent product	1970-01-01	14
-1144	17	636	5	Highly recommend	1970-01-01	48
-1147	71	906	2	Below expectations	1970-01-01	0
-1148	3	277	5	Perfect quality	1970-01-01	31
-1150	159	81	4	Good quality	1970-01-01	19
-1152	47	1341	2	Disappointing	1970-01-01	39
-1154	73	2132	1	Terrible	1970-01-01	21
-1155	56	2154	4	Satisfied with purchase	1970-01-01	47
-1156	177	1967	1	Very poor quality	1970-01-01	16
-1158	92	634	4	Would buy again	1970-01-01	11
-1159	182	2208	3	Average quality	1970-01-01	9
-1161	459	549	5	Amazing value	1970-01-01	6
-1162	233	21	5	Excellent product!	1970-01-01	3
-1163	266	1482	5	Amazing value	1970-01-01	44
-1164	197	1655	5	Amazing value	1970-01-01	26
-1166	98	12	4	Good quality	1970-01-01	14
-1167	21	450	5	Excellent product!	1970-01-01	22
-1168	473	1326	5	Highly recommend	1970-01-01	32
-1169	85	1169	4	Very good	1970-01-01	42
-1171	73	404	4	Nice product	1970-01-01	48
-1172	58	784	1	Waste of money	1970-01-01	42
-1173	348	712	5	Perfect quality	1970-01-01	22
-1174	364	2430	4	Would buy again	1970-01-01	8
-1175	149	304	1	Very poor quality	1970-01-01	34
-1177	380	1794	5	Amazing value	1970-01-01	6
-1178	312	158	5	Love it!	1970-01-01	48
-1180	290	1599	4	Nice product	1970-01-01	28
-1181	324	854	3	It's okay	1970-01-01	11
-1182	141	1850	4	Would buy again	1970-01-01	30
-1183	44	2472	5	Perfect quality	1970-01-01	30
-1184	198	606	5	Love it!	1970-01-01	16
-1185	138	1035	4	Would buy again	1970-01-01	31
-1186	85	1169	3	It's okay	1970-01-01	17
-1188	331	2432	4	Would buy again	1970-01-01	32
-1189	20	1046	4	Nice product	1970-01-01	37
-1190	36	1761	5	Amazing value	1970-01-01	30
-1192	147	1218	3	Does the job	1970-01-01	32
-1193	168	923	3	Could be better	1970-01-01	18
-1194	120	1140	5	Love it!	1970-01-01	0
-1195	427	2063	2	Issues with product	1970-01-01	8
-1196	462	2	5	Amazing value	1970-01-01	13
-1197	105	2334	4	Very good	1970-01-01	21
-1198	324	1055	5	Highly recommend	1970-01-01	44
-1199	355	1687	4	Very good	1970-01-01	37
-1201	341	2141	3	Could be better	1970-01-01	15
-1203	73	998	5	Amazing value	1970-01-01	50
-1204	462	2	3	Decent product	1970-01-01	27
-1205	140	919	5	Perfect quality	1970-01-01	7
-1206	487	949	5	Excellent product!	1970-01-01	26
-1207	303	597	4	Would buy again	1970-01-01	45
-1208	43	1461	2	Poor quality	1970-01-01	3
-1209	80	729	5	Highly recommend	1970-01-01	42
-1210	346	2075	4	Nice product	1970-01-01	33
-1214	47	719	4	Satisfied with purchase	1970-01-01	8
-1215	313	2283	4	Good quality	1970-01-01	15
-1216	188	2361	2	Below expectations	1970-01-01	11
-1217	155	2411	5	Highly recommend	1970-01-01	34
-1218	441	289	4	Satisfied with purchase	1970-01-01	19
-1220	207	2170	5	Excellent product!	1970-01-01	40
-1222	100	930	2	Issues with product	1970-01-01	0
-1223	104	501	4	Satisfied with purchase	1970-01-01	31
-1225	412	1132	4	Good quality	1970-01-01	19
-1226	232	1071	3	Decent product	1970-01-01	32
-1228	427	125	3	Does the job	1970-01-01	33
-1229	241	188	5	Love it!	1970-01-01	35
-1230	325	1387	4	Satisfied with purchase	1970-01-01	8
-1234	106	889	2	Poor quality	1970-01-01	42
-1237	418	1578	4	Good quality	1970-01-01	39
-1239	427	2044	4	Good quality	1970-01-01	34
-1241	407	307	5	Highly recommend	1970-01-01	2
-1245	354	724	3	It's okay	1970-01-01	5
-1246	42	962	4	Satisfied with purchase	1970-01-01	39
-1247	460	1011	4	Would buy again	1970-01-01	50
-1248	472	44	5	Love it!	1970-01-01	47
-1249	52	2355	3	It's okay	1970-01-01	27
-1253	203	561	4	Would buy again	1970-01-01	27
-1254	158	1324	5	Perfect quality	1970-01-01	30
-1255	187	1302	2	Below expectations	1970-01-01	24
-1256	460	2422	5	Love it!	1970-01-01	0
-1258	8	2041	3	Does the job	1970-01-01	5
-1260	185	1332	5	Excellent product!	1970-01-01	11
-1262	290	999	4	Satisfied with purchase	1970-01-01	14
-1263	310	1091	3	Does the job	1970-01-01	48
-1264	87	11	5	Perfect quality	1970-01-01	15
-1265	417	1271	3	Could be better	1970-01-01	12
-1267	353	346	4	Very good	1970-01-01	16
-1271	475	1502	3	Does the job	1970-01-01	22
-1273	179	641	5	Highly recommend	1970-01-01	3
-1274	209	150	5	Highly recommend	1970-01-01	47
-1275	355	831	4	Satisfied with purchase	1970-01-01	35
-1276	17	636	3	Could be better	1970-01-01	1
-1277	363	1478	3	Average quality	1970-01-01	16
-1278	8	1751	1	Waste of money	1970-01-01	21
-1279	444	178	3	Could be better	1970-01-01	38
-1281	358	1035	4	Would buy again	1970-01-01	2
-1282	129	1475	3	It's okay	1970-01-01	30
-1283	312	1781	5	Amazing value	1970-01-01	4
-1285	264	1665	4	Nice product	1970-01-01	40
-1286	63	2079	5	Perfect quality	1970-01-01	41
-1288	488	728	4	Nice product	1970-01-01	50
-1289	150	2294	5	Perfect quality	1970-01-01	38
-1290	101	1401	1	Very poor quality	1970-01-01	42
-1291	229	83	5	Perfect quality	1970-01-01	42
-1295	343	2218	5	Amazing value	1970-01-01	4
-1297	122	2324	5	Love it!	1970-01-01	34
-1298	472	2058	4	Good quality	1970-01-01	29
-1300	36	596	5	Highly recommend	1970-01-01	0
-1301	223	1498	4	Would buy again	1970-01-01	10
-1304	340	2208	3	Decent product	1970-01-01	20
-1305	413	2424	4	Nice product	1970-01-01	17
-1306	36	1092	5	Highly recommend	1970-01-01	2
-1307	331	9	4	Very good	1970-01-01	35
-1309	131	1279	2	Not great	1970-01-01	15
-1310	195	344	4	Very good	1970-01-01	7
-1311	173	1390	3	Decent product	1970-01-01	5
-1312	441	1669	5	Highly recommend	1970-01-01	34
-1314	194	1434	3	Does the job	1970-01-01	35
-1315	408	430	4	Good quality	1970-01-01	35
-1316	60	429	5	Excellent product!	1970-01-01	34
-1317	218	1715	4	Very good	1970-01-01	13
-1318	223	1498	3	Does the job	1970-01-01	12
-1319	351	941	3	Could be better	1970-01-01	8
-1320	273	366	4	Would buy again	1970-01-01	10
-1323	94	1905	5	Perfect quality	1970-01-01	27
-1324	491	1046	4	Good quality	1970-01-01	44
-1325	336	916	5	Perfect quality	1970-01-01	31
-1326	239	1043	3	Does the job	1970-01-01	36
-1327	93	656	4	Good quality	1970-01-01	21
-1328	224	2424	3	Average quality	1970-01-01	40
-1330	343	1822	4	Nice product	1970-01-01	40
-1331	479	1186	2	Not great	1970-01-01	32
-1333	399	1539	4	Good quality	1970-01-01	4
-1334	69	646	4	Nice product	1970-01-01	10
-1336	427	110	4	Satisfied with purchase	1970-01-01	42
-1337	164	886	5	Love it!	1970-01-01	3
-1338	186	1601	5	Amazing value	1970-01-01	32
-1339	299	2089	3	It's okay	1970-01-01	41
-1340	159	466	3	It's okay	1970-01-01	40
-1341	369	1685	5	Excellent product!	1970-01-01	23
-1342	467	2048	4	Good quality	1970-01-01	9
-1344	331	9	5	Love it!	1970-01-01	40
-1345	185	1410	4	Nice product	1970-01-01	16
-1346	101	1661	4	Very good	1970-01-01	46
-1347	239	1043	5	Love it!	1970-01-01	3
-1349	322	2463	3	Does the job	1970-01-01	15
-1350	289	1283	3	It's okay	1970-01-01	10
-1351	97	12	5	Perfect quality	1970-01-01	18
-1352	250	225	1	Waste of money	1970-01-01	12
-1353	445	2408	5	Highly recommend	1970-01-01	18
-1354	467	1634	4	Very good	1970-01-01	16
-1357	252	1726	5	Perfect quality	1970-01-01	42
-1359	250	887	4	Very good	1970-01-01	1
-1360	241	1534	3	Could be better	1970-01-01	16
-1363	248	499	3	Could be better	1970-01-01	5
-1365	397	237	4	Nice product	1970-01-01	50
-1366	44	1548	2	Disappointing	1970-01-01	46
-1368	429	1557	5	Perfect quality	1970-01-01	32
-1369	181	2435	5	Highly recommend	1970-01-01	12
-1370	215	2184	3	Decent product	1970-01-01	44
-1371	183	2158	3	Could be better	1970-01-01	34
-1372	133	355	4	Satisfied with purchase	1970-01-01	15
-1373	57	1492	3	Average quality	1970-01-01	49
-1377	69	1716	4	Good quality	1970-01-01	2
-1378	338	2016	3	Decent product	1970-01-01	3
-1379	306	752	4	Nice product	1970-01-01	4
-1380	60	1354	4	Would buy again	1970-01-01	23
-1381	336	916	3	It's okay	1970-01-01	36
-1382	273	1417	2	Issues with product	1970-01-01	37
-1383	212	203	1	Waste of money	1970-01-01	42
-1384	320	1496	3	Does the job	1970-01-01	35
-1385	180	1449	5	Love it!	1970-01-01	28
-1388	232	1499	5	Highly recommend	1970-01-01	3
-1389	440	566	5	Excellent product!	1970-01-01	30
-1390	94	1129	2	Poor quality	1970-01-01	35
-1394	445	1663	3	It's okay	1970-01-01	15
-1396	450	924	5	Love it!	1970-01-01	16
-1397	458	1656	4	Would buy again	1970-01-01	31
-1398	128	836	2	Issues with product	1970-01-01	49
-1399	13	754	4	Very good	1970-01-01	45
-1400	190	2342	4	Good quality	1970-01-01	45
-1401	421	378	3	Could be better	1970-01-01	14
-1402	117	1824	2	Below expectations	1970-01-01	47
-1403	44	2472	3	Could be better	1970-01-01	12
-1405	412	744	4	Nice product	1970-01-01	4
-1407	159	466	5	Highly recommend	1970-01-01	1
-1408	252	96	5	Amazing value	1970-01-01	24
-1409	39	1902	5	Love it!	1970-01-01	27
-1410	198	2361	4	Would buy again	1970-01-01	0
-1411	40	889	3	Decent product	1970-01-01	25
-1412	230	773	5	Highly recommend	1970-01-01	43
-1413	31	1653	4	Satisfied with purchase	1970-01-01	15
-1416	455	237	5	Amazing value	1970-01-01	4
-1417	265	1895	3	It's okay	1970-01-01	26
-1418	187	536	3	Average quality	1970-01-01	19
-1420	230	773	4	Nice product	1970-01-01	31
-1421	278	1766	3	Decent product	1970-01-01	33
-1422	119	976	4	Nice product	1970-01-01	41
-1425	251	1234	5	Amazing value	1970-01-01	11
-1426	448	1041	2	Disappointing	1970-01-01	34
-1427	192	946	5	Love it!	1970-01-01	23
-1428	187	1302	4	Good quality	1970-01-01	17
-1429	198	2445	4	Very good	1970-01-01	39
-1430	99	675	5	Amazing value	1970-01-01	50
-1431	33	1761	1	Waste of money	1970-01-01	19
-1434	152	1323	4	Satisfied with purchase	1970-01-01	48
-1435	322	1653	3	Could be better	1970-01-01	35
-1436	488	728	5	Amazing value	1970-01-01	31
-1437	326	1740	3	Decent product	1970-01-01	40
-1440	18	677	3	Average quality	1970-01-01	1
-1441	175	1138	1	Waste of money	1970-01-01	16
-1442	468	1418	4	Nice product	1970-01-01	26
-1443	47	2035	4	Good quality	1970-01-01	27
-1445	78	1461	3	It's okay	1970-01-01	2
-1447	147	1218	4	Very good	1970-01-01	21
-1448	425	336	3	Average quality	1970-01-01	28
-1450	203	543	4	Very good	1970-01-01	16
-1451	181	2355	4	Good quality	1970-01-01	32
-1452	452	975	2	Disappointing	1970-01-01	5
-1453	145	1455	4	Satisfied with purchase	1970-01-01	7
-1455	491	2029	5	Excellent product!	1970-01-01	34
-1456	493	2064	4	Very good	1970-01-01	24
-1457	65	14	5	Love it!	1970-01-01	24
-1459	387	860	4	Very good	1970-01-01	21
-1460	336	1718	3	Does the job	1970-01-01	22
-1461	183	2293	5	Love it!	1970-01-01	25
-1462	386	1627	4	Satisfied with purchase	1970-01-01	32
-1465	247	1102	2	Disappointing	1970-01-01	1
-1468	345	2459	3	Does the job	1970-01-01	43
-1469	191	737	3	Does the job	1970-01-01	36
-1470	92	1646	4	Would buy again	1970-01-01	27
-1471	362	915	1	Waste of money	1970-01-01	5
-1473	463	638	3	Average quality	1970-01-01	33
-1474	412	744	4	Nice product	1970-01-01	17
-1475	52	2316	4	Very good	1970-01-01	46
-1476	244	1829	5	Highly recommend	1970-01-01	13
-1477	325	2215	4	Nice product	1970-01-01	34
-1480	167	88	4	Good quality	1970-01-01	49
-1482	437	43	4	Good quality	1970-01-01	34
-1483	54	1560	2	Poor quality	1970-01-01	44
-1484	341	89	5	Excellent product!	1970-01-01	17
-1486	362	1148	5	Perfect quality	1970-01-01	17
-1487	179	2482	3	Could be better	1970-01-01	29
-1488	269	1804	1	Do not buy	1970-01-01	31
-1489	35	1857	5	Perfect quality	1970-01-01	42
-1490	327	749	4	Very good	1970-01-01	11
-1492	147	554	4	Would buy again	1970-01-01	36
-1494	411	493	5	Highly recommend	1970-01-01	44
-1496	96	736	4	Good quality	1970-01-01	27
-1497	431	1498	2	Disappointing	1970-01-01	32
-1500	459	549	5	Excellent product!	1970-01-01	28
-1501	41	404	3	Does the job	1970-01-01	37
-1502	30	777	4	Good quality	1970-01-01	48
-1503	412	380	3	Average quality	1970-01-01	20
-1504	247	2466	4	Would buy again	1970-01-01	13
-1505	133	355	4	Satisfied with purchase	1970-01-01	17
-1506	467	899	5	Amazing value	1970-01-01	31
-1507	180	305	5	Excellent product!	1970-01-01	5
-1508	97	1431	4	Would buy again	1970-01-01	6
-1509	310	2394	2	Issues with product	1970-01-01	40
-1510	234	1823	4	Would buy again	1970-01-01	4
-1511	94	1905	5	Love it!	1970-01-01	17
-1513	345	2459	5	Amazing value	1970-01-01	35
-1514	88	1800	3	Does the job	1970-01-01	40
-1516	277	580	4	Satisfied with purchase	1970-01-01	34
-1517	446	1151	3	Average quality	1970-01-01	10
-1518	56	797	4	Would buy again	1970-01-01	22
-1519	454	937	5	Highly recommend	1970-01-01	35
-1520	392	1891	2	Poor quality	1970-01-01	8
-1521	454	1427	4	Good quality	1970-01-01	17
-1522	181	939	4	Would buy again	1970-01-01	5
-1527	183	1641	5	Highly recommend	1970-01-01	43
-1529	250	179	5	Amazing value	1970-01-01	4
-1531	331	2432	4	Very good	1970-01-01	7
-1532	165	1478	2	Below expectations	1970-01-01	16
-1533	34	1820	4	Very good	1970-01-01	37
-1535	414	440	5	Love it!	1970-01-01	48
-1536	301	506	4	Good quality	1970-01-01	19
-1538	140	2449	3	Does the job	1970-01-01	31
-1539	2	374	3	Decent product	1970-01-01	34
-1541	467	1634	3	Could be better	1970-01-01	35
-1542	80	1273	4	Would buy again	1970-01-01	0
-1544	226	1097	4	Good quality	1970-01-01	11
-1546	98	141	5	Amazing value	1970-01-01	1
-1547	104	1346	4	Satisfied with purchase	1970-01-01	10
-1548	168	1377	4	Nice product	1970-01-01	3
-1549	128	759	4	Would buy again	1970-01-01	46
-1551	309	806	1	Completely unsatisfied	1970-01-01	23
-1552	177	1318	5	Love it!	1970-01-01	13
-1553	191	2186	5	Perfect quality	1970-01-01	4
-1554	33	1091	4	Would buy again	1970-01-01	42
-1555	142	2406	4	Very good	1970-01-01	45
-1559	456	1669	5	Highly recommend	1970-01-01	48
-1562	129	606	5	Excellent product!	1970-01-01	2
-1564	11	2121	5	Highly recommend	1970-01-01	49
-1567	354	724	3	It's okay	1970-01-01	50
-1568	462	468	5	Excellent product!	1970-01-01	32
-1569	358	1035	3	Decent product	1970-01-01	38
-1571	189	1611	3	Could be better	1970-01-01	46
-1572	124	1893	3	Could be better	1970-01-01	26
-1573	101	1661	5	Love it!	1970-01-01	26
-1574	473	1326	3	Could be better	1970-01-01	18
-1576	484	1422	4	Would buy again	1970-01-01	27
-1578	439	881	2	Issues with product	1970-01-01	10
-1580	274	2198	4	Would buy again	1970-01-01	17
-1581	308	1790	4	Nice product	1970-01-01	0
-1585	104	21	5	Excellent product!	1970-01-01	19
-1586	43	1042	3	Average quality	1970-01-01	9
-1588	90	65	2	Below expectations	1970-01-01	25
-1589	456	840	4	Satisfied with purchase	1970-01-01	13
-1591	463	2156	3	Does the job	1970-01-01	14
-1592	327	1780	3	Decent product	1970-01-01	45
-1593	336	2471	5	Highly recommend	1970-01-01	49
-1594	92	1779	5	Excellent product!	1970-01-01	24
-1595	174	1945	3	It's okay	1970-01-01	32
-1596	299	2089	3	Average quality	1970-01-01	29
-1597	288	2075	4	Would buy again	1970-01-01	7
-1598	17	1621	2	Issues with product	1970-01-01	30
-1599	392	1891	5	Amazing value	1970-01-01	1
-1600	230	1564	2	Disappointing	1970-01-01	13
-1601	44	1548	4	Would buy again	1970-01-01	13
-1602	130	741	3	Could be better	1970-01-01	14
-1603	431	494	3	Does the job	1970-01-01	9
-1605	436	864	3	Decent product	1970-01-01	29
-1606	466	1422	2	Poor quality	1970-01-01	43
-1607	493	2091	3	Does the job	1970-01-01	37
-1608	389	1744	3	It's okay	1970-01-01	14
-1609	335	69	5	Excellent product!	1970-01-01	34
-1610	473	1992	4	Good quality	1970-01-01	41
-1611	366	824	3	It's okay	1970-01-01	47
-1612	40	525	4	Good quality	1970-01-01	12
-1613	231	727	3	Average quality	1970-01-01	7
-1615	386	2013	4	Nice product	1970-01-01	32
-1617	144	158	3	Does the job	1970-01-01	25
-1618	363	2473	4	Very good	1970-01-01	23
-1620	1	701	4	Nice product	1970-01-01	0
-1621	463	246	3	Average quality	1970-01-01	6
-1623	24	570	4	Would buy again	1970-01-01	36
-1624	443	889	4	Nice product	1970-01-01	41
-1625	428	1214	4	Good quality	1970-01-01	45
-1627	34	1091	4	Good quality	1970-01-01	44
-1628	382	260	2	Disappointing	1970-01-01	42
-1629	377	819	4	Satisfied with purchase	1970-01-01	39
-1630	346	1123	4	Would buy again	1970-01-01	1
-1631	418	551	3	Average quality	1970-01-01	28
-1633	40	1851	4	Nice product	1970-01-01	16
-1634	30	1078	5	Love it!	1970-01-01	35
-1636	35	1857	3	Decent product	1970-01-01	14
-1638	85	153	4	Nice product	1970-01-01	38
-1639	313	2283	4	Nice product	1970-01-01	13
-1640	491	1745	4	Very good	1970-01-01	23
-1641	40	1698	1	Waste of money	1970-01-01	38
-1642	76	188	4	Nice product	1970-01-01	43
-1646	87	11	1	Do not buy	1970-01-01	47
-1648	360	1353	4	Would buy again	1970-01-01	42
-1649	500	947	5	Highly recommend	1970-01-01	29
-1650	356	468	3	Does the job	1970-01-01	26
-1651	462	1821	4	Good quality	1970-01-01	36
-1652	245	1546	4	Nice product	1970-01-01	15
-1653	76	1909	2	Issues with product	1970-01-01	46
-1654	35	1857	4	Very good	1970-01-01	33
-1655	120	1140	3	Does the job	1970-01-01	30
-1656	37	390	4	Satisfied with purchase	1970-01-01	20
-1657	373	1126	4	Would buy again	1970-01-01	43
-1658	80	729	4	Satisfied with purchase	1970-01-01	43
-1659	130	1309	5	Love it!	1970-01-01	38
-1660	305	567	3	Does the job	1970-01-01	38
-1662	319	1927	3	Average quality	1970-01-01	36
-1663	137	1151	3	Does the job	1970-01-01	23
-1664	260	1450	4	Good quality	1970-01-01	4
-1665	173	655	4	Nice product	1970-01-01	13
-1666	319	100	1	Waste of money	1970-01-01	5
-1667	269	2107	1	Waste of money	1970-01-01	29
-1668	488	1975	5	Highly recommend	1970-01-01	24
-1673	66	667	5	Love it!	1970-01-01	46
-1675	381	252	3	Decent product	1970-01-01	17
-1676	9	1736	4	Nice product	1970-01-01	27
-1677	119	1184	4	Very good	1970-01-01	6
-1678	116	508	4	Very good	1970-01-01	0
-1682	477	750	3	Could be better	1970-01-01	49
-1683	243	740	4	Nice product	1970-01-01	44
-1688	461	246	4	Nice product	1970-01-01	31
-1690	94	1563	2	Below expectations	1970-01-01	49
-1692	174	1094	2	Disappointing	1970-01-01	48
-1693	356	759	4	Satisfied with purchase	1970-01-01	17
-1696	173	655	4	Satisfied with purchase	1970-01-01	28
-1697	9	1267	5	Excellent product!	1970-01-01	49
-1700	488	930	5	Excellent product!	1970-01-01	21
-1701	262	626	4	Good quality	1970-01-01	5
-1703	380	842	4	Would buy again	1970-01-01	19
-1705	101	1661	5	Highly recommend	1970-01-01	37
-1707	13	78	5	Perfect quality	1970-01-01	16
-1708	10	9	4	Nice product	1970-01-01	25
-1710	264	2054	1	Waste of money	1970-01-01	20
-1712	62	2321	2	Poor quality	1970-01-01	32
-1714	489	319	5	Amazing value	1970-01-01	43
-1715	436	864	4	Would buy again	1970-01-01	38
-1717	71	1558	5	Love it!	1970-01-01	14
-1718	455	1614	3	Average quality	1970-01-01	16
-1721	315	1561	5	Love it!	1970-01-01	6
-1722	84	1226	4	Would buy again	1970-01-01	15
-1725	118	456	4	Good quality	1970-01-01	27
-1726	135	1591	1	Very poor quality	1970-01-01	3
-1729	493	2091	3	Could be better	1970-01-01	37
-1730	84	1463	2	Not great	1970-01-01	5
-1731	333	810	3	It's okay	1970-01-01	21
-1734	157	599	5	Amazing value	1970-01-01	26
-1736	21	1689	5	Excellent product!	1970-01-01	36
-1737	366	623	5	Excellent product!	1970-01-01	50
-1739	138	1035	5	Excellent product!	1970-01-01	33
-1740	337	1420	4	Satisfied with purchase	1970-01-01	23
-1741	115	334	2	Issues with product	1970-01-01	45
-1742	427	2063	5	Highly recommend	1970-01-01	6
-1743	455	1334	5	Amazing value	1970-01-01	20
-1747	304	1213	3	Could be better	1970-01-01	50
-1748	338	709	4	Very good	1970-01-01	1
-1749	274	320	2	Disappointing	1970-01-01	22
-1751	313	401	5	Amazing value	1970-01-01	24
-1753	448	111	4	Nice product	1970-01-01	12
-1754	272	2497	5	Perfect quality	1970-01-01	22
-1756	367	1998	3	Decent product	1970-01-01	42
-1757	337	1397	5	Amazing value	1970-01-01	36
-1759	119	1184	4	Would buy again	1970-01-01	32
-1760	39	972	4	Would buy again	1970-01-01	30
-1761	8	1751	1	Terrible	1970-01-01	19
-1762	457	938	4	Satisfied with purchase	1970-01-01	13
-1763	115	1676	5	Amazing value	1970-01-01	45
-1764	282	1575	5	Perfect quality	1970-01-01	31
-1765	222	375	5	Excellent product!	1970-01-01	27
-1766	242	795	2	Issues with product	1970-01-01	13
-1767	457	850	5	Excellent product!	1970-01-01	12
-1769	456	1669	1	Very poor quality	1970-01-01	42
-1770	397	867	2	Poor quality	1970-01-01	43
-1771	326	1740	2	Below expectations	1970-01-01	23
-1772	489	600	4	Good quality	1970-01-01	9
-1773	28	1970	5	Perfect quality	1970-01-01	0
-1775	240	1768	4	Very good	1970-01-01	44
-1776	331	46	5	Love it!	1970-01-01	26
-1777	378	837	5	Love it!	1970-01-01	2
-1779	491	1745	5	Perfect quality	1970-01-01	27
-1780	355	742	3	It's okay	1970-01-01	7
-1781	312	158	2	Below expectations	1970-01-01	41
-1782	234	8	2	Not great	1970-01-01	7
-1783	8	1751	4	Satisfied with purchase	1970-01-01	42
-1785	269	1804	5	Love it!	1970-01-01	43
-1786	241	814	4	Nice product	1970-01-01	14
-1791	251	1234	5	Love it!	1970-01-01	50
-1792	482	905	3	Does the job	1970-01-01	27
-1793	462	917	4	Nice product	1970-01-01	38
-1796	242	590	4	Would buy again	1970-01-01	35
-1797	389	1895	1	Very poor quality	1970-01-01	1
-1799	297	1915	3	It's okay	1970-01-01	9
 \.
 
 
@@ -12516,6 +11386,13 @@ SELECT pg_catalog.setval('public.employee_employee_id_seq', 1, false);
 
 
 --
+-- Name: inv_log_log_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
+--
+
+SELECT pg_catalog.setval('public.inv_log_log_id_seq', 1, true);
+
+
+--
 -- Name: inventory_movements_movement_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
@@ -12526,7 +11403,7 @@ SELECT pg_catalog.setval('public.inventory_movements_movement_id_seq', 1, false)
 -- Name: order_items_order_item_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.order_items_order_item_id_seq', 1, false);
+SELECT pg_catalog.setval('public.order_items_order_item_id_seq', 5003, true);
 
 
 --
@@ -12605,6 +11482,14 @@ ALTER TABLE ONLY public.employee
 
 
 --
+-- Name: inv_log inv_log_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.inv_log
+    ADD CONSTRAINT inv_log_pkey PRIMARY KEY (log_id);
+
+
+--
 -- Name: inventory_movements inventory_movements_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
 --
 
@@ -12666,6 +11551,13 @@ ALTER TABLE ONLY public.review
 
 ALTER TABLE ONLY public.supplier
     ADD CONSTRAINT supplier_pkey PRIMARY KEY (supplier_id);
+
+
+--
+-- Name: order_items trg_log_inventory_on_order; Type: TRIGGER; Schema: public; Owner: postgres
+--
+
+CREATE TRIGGER trg_log_inventory_on_order AFTER INSERT ON public.order_items FOR EACH ROW EXECUTE FUNCTION public.log_inventory();
 
 
 --
